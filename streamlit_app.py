@@ -9,33 +9,39 @@ import os
 
 # Initialize database if it doesn't exist
 def initialize_database():
-    """Initialize database by running ETL pipeline if needed"""
+    """Initialize database from processed CSV files"""
     db_path = Path(__file__).parent / 'ecommerce.db'
+    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
     
     if not db_path.exists():
-        st.warning("⚙️ Initializing database... This may take a minute on first load.")
+        st.warning("⚙️ Initializing database from processed data files...")
         try:
-            # Run the ETL pipeline
-            from src.pipeline import run_pipeline
-            from src import config, load
-            
-            # Run pipeline to generate processed data
-            raw_data = __import__('src.extract', fromlist=['load_all_raw']).load_all_raw()
-            stg_data = __import__('src.transform_staging', fromlist=['stage_all']).stage_all(raw_data)
-            wh_data = __import__('src.transform_warehouse', fromlist=['build_warehouse']).build_warehouse(stg_data)
-            
-            # Load to SQLite database
+            # Create database from processed CSV files
             from sqlalchemy import create_engine
             engine = create_engine(f'sqlite:///{db_path}')
             
-            # Save each table to database
-            for table_name, df in wh_data.items():
-                df.to_sql(table_name, engine, if_exists='replace', index=False)
+            # List of expected processed tables
+            tables = [
+                'dim_products',
+                'dim_users', 
+                'fact_orders',
+                'fact_order_items',
+                'fact_reviews'
+            ]
             
-            st.success("✅ Database initialized successfully!")
+            # Load each CSV file into the database
+            for table_name in tables:
+                csv_file = processed_dir / f'{table_name}.csv'
+                if csv_file.exists():
+                    df = pd.read_csv(csv_file)
+                    df.to_sql(table_name, engine, if_exists='replace', index=False)
+                    st.write(f"✓ Loaded {table_name}")
+            
+            st.success("✅ Database initialized successfully from processed data!")
+            return True
         except Exception as e:
             st.error(f"❌ Error initializing database: {str(e)}")
-            st.info("The database will be created from CSV files on next refresh.")
+            st.info("Make sure the Data/Processed directory contains the required CSV files.")
             return False
     return True
 
