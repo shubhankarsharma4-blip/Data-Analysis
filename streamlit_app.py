@@ -15,12 +15,27 @@ def initialize_database():
     if not db_path.exists():
         st.warning("⚙️ Initializing database... This may take a minute on first load.")
         try:
-            from src.pipeline import run_full_pipeline
-            run_full_pipeline()
+            # Run the ETL pipeline
+            from src.pipeline import run_pipeline
+            from src import config, load
+            
+            # Run pipeline to generate processed data
+            raw_data = __import__('src.extract', fromlist=['load_all_raw']).load_all_raw()
+            stg_data = __import__('src.transform_staging', fromlist=['stage_all']).stage_all(raw_data)
+            wh_data = __import__('src.transform_warehouse', fromlist=['build_warehouse']).build_warehouse(stg_data)
+            
+            # Load to SQLite database
+            from sqlalchemy import create_engine
+            engine = create_engine(f'sqlite:///{db_path}')
+            
+            # Save each table to database
+            for table_name, df in wh_data.items():
+                df.to_sql(table_name, engine, if_exists='replace', index=False)
+            
             st.success("✅ Database initialized successfully!")
         except Exception as e:
             st.error(f"❌ Error initializing database: {str(e)}")
-            st.info("Please check the logs or run the pipeline locally first.")
+            st.info("The database will be created from CSV files on next refresh.")
             return False
     return True
 
