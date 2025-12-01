@@ -13,37 +13,45 @@ def initialize_database():
     db_path = Path(__file__).parent / 'ecommerce.db'
     processed_dir = Path(__file__).parent / 'Data' / 'Processed'
     
-    if not db_path.exists():
-        st.warning("⚙️ Initializing database from processed data files...")
-        try:
-            # Create database from processed CSV files
-            from sqlalchemy import create_engine
-            engine = create_engine(f'sqlite:///{db_path}')
-            
-            # List of expected processed tables
-            tables = [
-                'dim_products',
-                'dim_users', 
-                'fact_orders',
-                'fact_order_items',
-                'fact_reviews'
-            ]
-            
-            # Load each CSV file into the database
-            for table_name in tables:
-                csv_file = processed_dir / f'{table_name}.csv'
-                if csv_file.exists():
-                    df = pd.read_csv(csv_file)
-                    df.to_sql(table_name, engine, if_exists='replace', index=False)
-                    st.write(f"✓ Loaded {table_name}")
-            
-            st.success("✅ Database initialized successfully from processed data!")
+    try:
+        # Check if database already has tables
+        from sqlalchemy import create_engine, inspect
+        engine = create_engine(f'sqlite:///{db_path}')
+        inspector = inspect(engine)
+        existing_tables = inspector.get_table_names()
+        
+        # If all required tables exist, we're good
+        required_tables = ['dim_products', 'dim_users', 'fact_orders', 'fact_order_items', 'fact_reviews']
+        if all(table in existing_tables for table in required_tables):
             return True
-        except Exception as e:
-            st.error(f"❌ Error initializing database: {str(e)}")
-            st.info("Make sure the Data/Processed directory contains the required CSV files.")
-            return False
-    return True
+        
+        # Otherwise, initialize from CSV
+        st.warning("⚙️ Initializing database from processed data files...")
+        
+        # List of expected processed tables
+        tables = [
+            'dim_products',
+            'dim_users', 
+            'fact_orders',
+            'fact_order_items',
+            'fact_reviews',
+            'fact_events'
+        ]
+        
+        # Load each CSV file into the database
+        for table_name in tables:
+            csv_file = processed_dir / f'{table_name}.csv'
+            if csv_file.exists():
+                df = pd.read_csv(csv_file)
+                df.to_sql(table_name, engine, if_exists='replace', index=False)
+        
+        st.success("✅ Database initialized successfully from processed data!")
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ Error initializing database: {str(e)}")
+        st.info("Trying to load from CSV files directly...")
+        return False
 
 # Page Configuration
 st.set_page_config(
@@ -78,10 +86,14 @@ def get_engine():
 engine = get_engine()
 
 # Query Functions
-@st.cache_data
+@st.cache_data(ttl=3600)
 def load_data(query):
     """Load data from SQLite database"""
-    return pd.read_sql(query, engine)
+    try:
+        return pd.read_sql(query, engine)
+    except Exception as e:
+        st.error(f"Database query error: {e}")
+        return pd.DataFrame()
 
 def get_kpis():
     """Get key performance indicators"""
