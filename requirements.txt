@@ -1,0 +1,12 @@
+# Core data processing
+pandas
+numpy
+
+# Visualization
+plotly
+
+# Web framework
+streamlit
+
+# Database
+sqlalchemy
