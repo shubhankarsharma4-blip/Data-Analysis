@@ -65,14 +65,105 @@ st.set_page_config(
 if not initialize_database():
     st.stop()
 
-# Custom CSS
+# Custom CSS for beautiful styling
 st.markdown("""
     <style>
-    .metric-card {
-        background-color: #f0f2f6;
-        padding: 20px;
+    /* Main theme colors */
+    :root {
+        --primary-color: #667eea;
+        --secondary-color: #764ba2;
+        --accent-color: #f39c12;
+    }
+    
+    /* Page background */
+    .main {
+        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    }
+    
+    /* Title styling */
+    h1 {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        text-align: center;
+        font-size: 3em;
+        margin-bottom: 10px;
+        text-shadow: none;
+    }
+    
+    /* Subtitle */
+    .subtitle {
+        text-align: center;
+        color: #555;
+        font-size: 1.2em;
+        margin-bottom: 30px;
+    }
+    
+    /* Section headers */
+    h2 {
+        color: #2c3e50;
+        border-bottom: 3px solid #667eea;
+        padding-bottom: 10px;
+        margin-top: 40px;
+        font-size: 1.8em;
+    }
+    
+    /* Metric cards with gradient */
+    [data-testid="metric-container"] {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px !important;
+        border-radius: 15px !important;
+        box-shadow: 0 8px 16px rgba(102, 126, 234, 0.3) !important;
+        border-left: 5px solid #f39c12;
+    }
+    
+    [data-testid="metric-container"] > div {
+        color: white !important;
+    }
+    
+    /* Chart container */
+    .plotly-graph-div {
+        border-radius: 12px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        padding: 10px;
+    }
+    
+    /* Column separator */
+    .column-divider {
+        border-right: 2px solid #e0e0e0;
+    }
+    
+    /* Success messages */
+    .stAlert {
         border-radius: 10px;
-        margin: 10px 0;
+        padding: 15px;
+    }
+    
+    /* Data table */
+    .stDataFrame {
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    }
+    
+    /* Divider line */
+    hr {
+        border: none;
+        height: 2px;
+        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+        margin: 40px 0;
+    }
+    
+    /* Footer */
+    footer {
+        background-color: transparent;
+    }
+    
+    /* Text styling */
+    .info-text {
+        color: #555;
+        font-size: 0.95em;
+        line-height: 1.6;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -172,27 +263,43 @@ def get_product_reviews():
 
 # Main App
 st.title("📊 E-Commerce Analytics Dashboard")
-st.markdown("Real-time insights into your e-commerce business performance")
+st.markdown('<p class="subtitle">Real-time insights into your e-commerce business performance</p>', unsafe_allow_html=True)
 
 try:
-    # KPIs
-    st.subheader("Key Performance Indicators")
+    # KPIs Section
+    st.markdown("### 📈 Key Performance Indicators", unsafe_allow_html=True)
     kpis = get_kpis()
     
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4 = st.columns(4, gap="medium")
     with col1:
-        st.metric("Total Orders", f"{int(kpis['total_orders']):,}")
+        st.metric(
+            label="🛒 Total Orders",
+            value=f"{int(kpis['total_orders']):,}",
+            delta="Orders processed"
+        )
     with col2:
-        st.metric("Total Customers", f"{int(kpis['total_customers']):,}")
+        st.metric(
+            label="👥 Total Customers", 
+            value=f"{int(kpis['total_customers']):,}",
+            delta="Active customers"
+        )
     with col3:
-        st.metric("Total Revenue", f"${kpis['total_revenue']:,.2f}")
+        st.metric(
+            label="💰 Total Revenue",
+            value=f"${kpis['total_revenue']:,.2f}",
+            delta="Total earned"
+        )
     with col4:
-        st.metric("Avg Order Value", f"${kpis['avg_order_value']:,.2f}")
+        st.metric(
+            label="💵 Avg Order Value",
+            value=f"${kpis['avg_order_value']:,.2f}",
+            delta="Per order"
+        )
     
     st.divider()
     
-    # Revenue Trend
-    st.subheader("Revenue Trend")
+    # Revenue Trend Section
+    st.markdown("### 📊 Revenue Trend", unsafe_allow_html=True)
     revenue_data = get_revenue_by_month()
     if not revenue_data.empty:
         fig_revenue = px.line(
@@ -201,18 +308,30 @@ try:
             y='revenue',
             title='Monthly Revenue Trend',
             markers=True,
-            line_shape='linear'
+            line_shape='linear',
+            template='plotly_white'
         )
-        fig_revenue.update_xaxes(title_text='Month')
-        fig_revenue.update_yaxes(title_text='Revenue ($)')
+        fig_revenue.update_traces(
+            line=dict(color='#667eea', width=3),
+            marker=dict(size=10, color='#764ba2')
+        )
+        fig_revenue.update_layout(
+            hovermode='x unified',
+            plot_bgcolor='rgba(240, 240, 240, 0.5)',
+            paper_bgcolor='rgba(255,255,255,0)',
+            font=dict(size=12),
+            height=400
+        )
         st.plotly_chart(fig_revenue, use_container_width=True)
     
     st.divider()
     
-    # Top Products
-    col1, col2 = st.columns(2)
+    # Products and Ratings Section
+    st.markdown("### 🏆 Products Performance", unsafe_allow_html=True)
+    col1, col2 = st.columns(2, gap="large")
+    
     with col1:
-        st.subheader("Top 10 Products by Revenue")
+        st.markdown("#### Top 10 Products by Revenue")
         top_products = get_top_products()
         if not top_products.empty:
             fig_products = px.bar(
@@ -220,13 +339,23 @@ try:
                 x='total_revenue',
                 y='product_name',
                 orientation='h',
-                title='Top Products',
-                labels={'total_revenue': 'Revenue ($)', 'product_name': 'Product'}
+                template='plotly_white',
+                color='total_revenue',
+                color_continuous_scale='Viridis'
+            )
+            fig_products.update_layout(
+                showlegend=False,
+                hovermode='y',
+                plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                paper_bgcolor='rgba(255,255,255,0)',
+                height=500,
+                xaxis_title="Revenue ($)",
+                yaxis_title=""
             )
             st.plotly_chart(fig_products, use_container_width=True)
     
     with col2:
-        st.subheader("Top Rated Products")
+        st.markdown("#### Top Rated Products")
         reviews = get_product_reviews()
         if not reviews.empty:
             fig_ratings = px.scatter(
@@ -235,34 +364,56 @@ try:
                 y='avg_rating',
                 size='avg_rating',
                 hover_name='product_name',
-                title='Product Ratings vs Review Count',
-                labels={'avg_rating': 'Average Rating', 'review_count': 'Review Count'}
+                template='plotly_white',
+                color='avg_rating',
+                color_continuous_scale='RdYlGn'
+            )
+            fig_ratings.update_layout(
+                hovermode='closest',
+                plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                paper_bgcolor='rgba(255,255,255,0)',
+                height=500,
+                xaxis_title="Review Count",
+                yaxis_title="Average Rating"
             )
             st.plotly_chart(fig_ratings, use_container_width=True)
     
     st.divider()
     
-    # Customer Metrics
-    st.subheader("Customer Insights")
+    # Customer Insights Section
+    st.markdown("### 👥 Customer Insights", unsafe_allow_html=True)
     customer_metrics = get_customer_metrics()
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3 = st.columns(3, gap="medium")
     with col1:
-        st.metric("Total Customers", f"{int(customer_metrics['total_customers']):,}")
+        st.metric(
+            label="👫 Total Customers",
+            value=f"{int(customer_metrics['total_customers']):,}",
+            delta="Active users"
+        )
     with col2:
-        st.metric("Avg Orders per Customer", f"{customer_metrics['avg_orders_per_customer']:.2f}")
+        st.metric(
+            label="📦 Avg Orders per Customer",
+            value=f"{customer_metrics['avg_orders_per_customer']:.2f}",
+            delta="Per user"
+        )
     with col3:
-        st.metric("Avg Spend per Customer", f"${customer_metrics['avg_spend_per_customer']:,.2f}")
+        st.metric(
+            label="💳 Avg Spend per Customer",
+            value=f"${customer_metrics['avg_spend_per_customer']:,.2f}",
+            delta="Lifetime value"
+        )
+    
+    st.divider()
     
     # Footer
-    st.divider()
     st.markdown("""
-    ---
-    **Dashboard Information:**
-    - Data updates automatically from the ETL pipeline
-    - All metrics are calculated in real-time
-    - Database: SQLite with star-schema design
-    """)
+    <div style='text-align: center; color: #666; font-size: 0.9em; margin-top: 50px;'>
+        <p>📊 <b>Dashboard Information:</b></p>
+        <p>Data updates automatically | All metrics calculated in real-time | Star-schema database design</p>
+        <p style='margin-top: 20px; color: #999;'>Built with Streamlit • Powered by SQLite • Analytics Dashboard v1.0</p>
+    </div>
+    """, unsafe_allow_html=True)
     
 except Exception as e:
     st.error(f"❌ Error loading dashboard: {str(e)}")
