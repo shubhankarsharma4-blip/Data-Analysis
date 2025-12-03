@@ -261,6 +261,102 @@ def get_product_reviews():
     """
     return load_data(query)
 
+def get_category_analysis():
+    """Get product category analysis"""
+    query = """
+    SELECT 
+        p.category,
+        COUNT(DISTINCT foi.product_id) as product_count,
+        COUNT(DISTINCT foi.order_id) as order_count,
+        ROUND(SUM(foi.item_total), 2) as category_revenue,
+        ROUND(AVG(foi.item_price), 2) as avg_price,
+        ROUND(SUM(foi.quantity), 0) as total_quantity
+    FROM fact_order_items foi
+    JOIN dim_products p ON foi.product_id = p.product_id
+    GROUP BY p.category
+    ORDER BY category_revenue DESC
+    """
+    return load_data(query)
+
+def get_customer_segments():
+    """Get customer segmentation analysis"""
+    query = """
+    SELECT 
+        CASE 
+            WHEN total_spent > 5000 THEN 'Premium (>$5k)'
+            WHEN total_spent > 2000 THEN 'Gold ($2k-$5k)'
+            WHEN total_spent > 500 THEN 'Silver ($500-$2k)'
+            ELSE 'Bronze (<$500)'
+        END as segment,
+        COUNT(*) as customer_count,
+        ROUND(AVG(total_spent), 2) as avg_spend,
+        ROUND(AVG(order_count), 2) as avg_orders,
+        ROUND(SUM(total_spent), 2) as segment_revenue
+    FROM (
+        SELECT 
+            user_id,
+            COUNT(*) as order_count,
+            SUM(item_total) as total_spent
+        FROM fact_order_items
+        GROUP BY user_id
+    )
+    GROUP BY segment
+    ORDER BY segment_revenue DESC
+    """
+    return load_data(query)
+
+def get_sales_by_category():
+    """Get sales trend by category"""
+    query = """
+    SELECT 
+        strftime('%Y-%m', o.order_date) as month,
+        p.category,
+        ROUND(SUM(foi.item_total), 2) as revenue
+    FROM fact_order_items foi
+    JOIN fact_orders o ON foi.order_id = o.order_id
+    JOIN dim_products p ON foi.product_id = p.product_id
+    GROUP BY strftime('%Y-%m', o.order_date), p.category
+    ORDER BY month, revenue DESC
+    """
+    return load_data(query)
+
+def get_top_customers():
+    """Get top customers by revenue"""
+    query = """
+    SELECT 
+        u.user_id,
+        u.customer_name,
+        COUNT(DISTINCT foi.order_id) as order_count,
+        ROUND(SUM(foi.item_total), 2) as total_spent,
+        ROUND(AVG(foi.item_price), 2) as avg_purchase
+    FROM fact_order_items foi
+    JOIN dim_users u ON foi.user_id = u.user_id
+    GROUP BY u.user_id, u.customer_name
+    ORDER BY total_spent DESC
+    LIMIT 10
+    """
+    return load_data(query)
+
+def get_product_performance():
+    """Get detailed product performance metrics"""
+    query = """
+    SELECT 
+        p.product_name,
+        p.category,
+        COUNT(DISTINCT foi.order_id) as times_sold,
+        ROUND(SUM(foi.quantity), 0) as units_sold,
+        ROUND(SUM(foi.item_total), 2) as total_revenue,
+        ROUND(AVG(foi.item_price), 2) as avg_price,
+        ROUND(AVG(CAST(fr.rating as float)), 2) as avg_rating
+    FROM fact_order_items foi
+    JOIN dim_products p ON foi.product_id = p.product_id
+    LEFT JOIN fact_reviews fr ON foi.product_id = fr.product_id
+    GROUP BY foi.product_id, p.product_name, p.category
+    ORDER BY total_revenue DESC
+    LIMIT 15
+    """
+    return load_data(query)
+
 # Main App
 st.title("📊 E-Commerce Analytics Dashboard")
 st.markdown('<p class="subtitle">Real-time insights into your e-commerce business performance</p>', unsafe_allow_html=True)
@@ -403,6 +499,181 @@ try:
             value=f"${customer_metrics['avg_spend_per_customer']:,.2f}",
             delta="Lifetime value"
         )
+    
+    st.divider()
+    
+    # Category Analysis Section
+    st.markdown("### 📦 Product Category Analysis", unsafe_allow_html=True)
+    category_data = get_category_analysis()
+    
+    if not category_data.empty:
+        col1, col2 = st.columns(2, gap="large")
+        
+        with col1:
+            st.markdown("#### Revenue by Category")
+            fig_category = px.bar(
+                category_data,
+                x='category',
+                y='category_revenue',
+                color='category_revenue',
+                template='plotly_white',
+                color_continuous_scale='Blues'
+            )
+            fig_category.update_layout(
+                showlegend=False,
+                hovermode='x',
+                plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                paper_bgcolor='rgba(255,255,255,0)',
+                height=400,
+                xaxis_title="Category",
+                yaxis_title="Revenue ($)"
+            )
+            st.plotly_chart(fig_category, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### Category Metrics Table")
+            display_df = category_data.copy()
+            display_df.columns = ['Category', 'Products', 'Orders', 'Revenue', 'Avg Price', 'Units Sold']
+            st.dataframe(display_df, use_container_width=True, hide_index=True)
+    
+    st.divider()
+    
+    # Customer Segmentation Section
+    st.markdown("### 💼 Customer Segmentation", unsafe_allow_html=True)
+    segments = get_customer_segments()
+    
+    if not segments.empty:
+        col1, col2 = st.columns(2, gap="large")
+        
+        with col1:
+            st.markdown("#### Customer Segments Distribution")
+            fig_segments = px.pie(
+                segments,
+                values='customer_count',
+                names='segment',
+                template='plotly_white',
+                color_discrete_sequence=['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4']
+            )
+            fig_segments.update_layout(
+                height=400,
+                showlegend=True
+            )
+            st.plotly_chart(fig_segments, use_container_width=True)
+        
+        with col2:
+            st.markdown("#### Segment Revenue Analysis")
+            fig_seg_revenue = px.bar(
+                segments,
+                x='segment',
+                y='segment_revenue',
+                color='segment_revenue',
+                template='plotly_white',
+                color_continuous_scale='Greens'
+            )
+            fig_seg_revenue.update_layout(
+                showlegend=False,
+                hovermode='x',
+                plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                paper_bgcolor='rgba(255,255,255,0)',
+                height=400,
+                xaxis_title="Segment",
+                yaxis_title="Revenue ($)"
+            )
+            st.plotly_chart(fig_seg_revenue, use_container_width=True)
+    
+    st.divider()
+    
+    # Sales by Category Trend
+    st.markdown("### 📈 Sales Trend by Category", unsafe_allow_html=True)
+    sales_category = get_sales_by_category()
+    
+    if not sales_category.empty:
+        fig_sales_trend = px.line(
+            sales_category,
+            x='month',
+            y='revenue',
+            color='category',
+            template='plotly_white',
+            markers=True
+        )
+        fig_sales_trend.update_layout(
+            hovermode='x unified',
+            plot_bgcolor='rgba(240, 240, 240, 0.5)',
+            paper_bgcolor='rgba(255,255,255,0)',
+            height=450,
+            xaxis_title="Month",
+            yaxis_title="Revenue ($)",
+            legend=dict(
+                title="Category",
+                yanchor="top",
+                y=0.99,
+                xanchor="left",
+                x=0.01
+            )
+        )
+        st.plotly_chart(fig_sales_trend, use_container_width=True)
+    
+    st.divider()
+    
+    # Top Customers Section
+    st.markdown("### 🌟 Top 10 Customers", unsafe_allow_html=True)
+    top_customers = get_top_customers()
+    
+    if not top_customers.empty:
+        fig_customers = px.bar(
+            top_customers,
+            x='total_spent',
+            y='customer_name',
+            orientation='h',
+            template='plotly_white',
+            color='order_count',
+            color_continuous_scale='Oranges'
+        )
+        fig_customers.update_layout(
+            showlegend=True,
+            hovermode='y',
+            plot_bgcolor='rgba(240, 240, 240, 0.5)',
+            paper_bgcolor='rgba(255,255,255,0)',
+            height=500,
+            xaxis_title="Total Spent ($)",
+            yaxis_title="Customer",
+            coloraxis_colorbar=dict(title="Orders")
+        )
+        st.plotly_chart(fig_customers, use_container_width=True)
+    
+    st.divider()
+    
+    # Product Performance Detailed Analysis
+    st.markdown("### 🏆 Detailed Product Performance", unsafe_allow_html=True)
+    product_perf = get_product_performance()
+    
+    if not product_perf.empty:
+        st.markdown("#### Top 15 Products by Revenue with Full Metrics")
+        display_prod = product_perf.copy()
+        display_prod.columns = ['Product', 'Category', 'Times Sold', 'Units Sold', 'Revenue', 'Avg Price', 'Rating']
+        st.dataframe(display_prod, use_container_width=True, hide_index=True)
+        
+        # Product scatter plot
+        st.markdown("#### Product Performance Scatter (Revenue vs Rating vs Units Sold)")
+        fig_prod = px.scatter(
+            product_perf,
+            x='total_revenue',
+            y='avg_rating',
+            size='units_sold',
+            hover_name='product_name',
+            color='category',
+            template='plotly_white',
+            size_max=50
+        )
+        fig_prod.update_layout(
+            hovermode='closest',
+            plot_bgcolor='rgba(240, 240, 240, 0.5)',
+            paper_bgcolor='rgba(255,255,255,0)',
+            height=450,
+            xaxis_title="Total Revenue ($)",
+            yaxis_title="Average Rating"
+        )
+        st.plotly_chart(fig_prod, use_container_width=True)
     
     st.divider()
     
