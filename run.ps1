@@ -23,4 +23,4 @@ if ($recreate -or -not (Test-Path $venvPath)) {
 }
 
 Write-Host "Starting Streamlit app on http://127.0.0.1:$port"
-streamlit run app.py --server.port=$port --server.address=127.0.0.1
+streamlit run streamlit_app.py --server.port=$port --server.address=127.0.0.1
