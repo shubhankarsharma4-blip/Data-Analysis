@@ -41,7 +41,8 @@ env/
 Data/Raw/*
 !Data/Raw/.gitkeep
 # Allow Processed CSV files for Streamlit Cloud deployment
-Data/Processed/*.csv
+Data/Processed/*
+!Data/Processed/*.csv
 !Data/Processed/.gitkeep
 logs/*
 !logs/.gitkeep
