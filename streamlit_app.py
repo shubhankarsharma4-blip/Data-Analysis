@@ -7,71 +7,7 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import os
 
-# Initialize database if it doesn't exist
-@st.cache_resource
-def initialize_database():
-    """Initialize database from processed CSV files - cached for performance"""
-    db_path = Path(__file__).parent / 'ecommerce.db'
-    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
-    
-    try:
-        from sqlalchemy import create_engine, inspect
-        
-        # Create engine
-        engine = create_engine(f'sqlite:///{db_path}')
-        
-        # Check if database already has all required tables
-        inspector = inspect(engine)
-        existing_tables = inspector.get_table_names()
-        
-        required_tables = ['dim_products', 'dim_users', 'fact_orders', 'fact_order_items', 'fact_reviews']
-        tables_exist = all(table in existing_tables for table in required_tables)
-        
-        # If tables exist and have data, we're good
-        if tables_exist:
-            # Verify tables have data
-            try:
-                test_query = "SELECT COUNT(*) as cnt FROM fact_order_items"
-                result = pd.read_sql(test_query, engine)
-                if result.iloc[0]['cnt'] > 0:
-                    return engine
-            except:
-                pass  # If query fails, recreate tables
-        
-        # Initialize from CSV files
-        tables = [
-            'dim_products',
-            'dim_users', 
-            'fact_orders',
-            'fact_order_items',
-            'fact_reviews',
-            'fact_events'
-        ]
-        
-        # Load each CSV file into the database
-        for table_name in tables:
-            csv_file = processed_dir / f'{table_name}.csv'
-            if csv_file.exists():
-                df = pd.read_csv(csv_file)
-                df.to_sql(table_name, engine, if_exists='replace', index=False)
-        
-        # Verify tables were created
-        inspector = inspect(engine)
-        created_tables = inspector.get_table_names()
-        missing_tables = [t for t in required_tables if t not in created_tables]
-        
-        if missing_tables:
-            raise Exception(f"Failed to create tables: {missing_tables}")
-        
-        return engine
-        
-    except Exception as e:
-        st.error(f"❌ Error initializing database: {str(e)}")
-        import traceback
-        st.code(traceback.format_exc())
-        return None
-
-# Page Configuration
+# Page Configuration - Must be first
 st.set_page_config(
     page_title="Ecommerce Analytics Dashboard",
     page_icon="📊",
@@ -79,23 +15,83 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialize database
-with st.spinner("⚙️ Initializing database from processed data files..."):
-    engine = initialize_database()
+# Load CSV data directly into memory as fallback
+@st.cache_data
+def load_csv_data():
+    """Load all CSV files directly into memory"""
+    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
+    data = {}
+    
+    tables = [
+        'dim_products', 'dim_users', 'fact_orders', 
+        'fact_order_items', 'fact_reviews', 'fact_events'
+    ]
+    
+    for table_name in tables:
+        csv_file = processed_dir / f'{table_name}.csv'
+        if csv_file.exists():
+            try:
+                data[table_name] = pd.read_csv(csv_file)
+            except Exception as e:
+                st.error(f"Error loading {table_name}: {e}")
+                data[table_name] = pd.DataFrame()
+        else:
+            data[table_name] = pd.DataFrame()
+    
+    return data
 
-if engine is None:
-    st.error("❌ Failed to initialize database. Please check CSV files in Data/Processed/")
-    st.stop()
+# Initialize database from CSV files
+@st.cache_resource
+def get_database_engine():
+    """Initialize database from CSV files - always rebuild"""
+    db_path = Path(__file__).parent / 'ecommerce.db'
+    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
+    
+    try:
+        from sqlalchemy import create_engine, inspect
+        
+        # Create engine with absolute path for better compatibility
+        db_path_str = str(db_path.absolute())
+        engine = create_engine(f'sqlite:///{db_path_str}')
+        
+        # Always rebuild tables from CSV (ephemeral on Streamlit Cloud)
+        tables = [
+            'dim_products', 'dim_users', 'fact_orders',
+            'fact_order_items', 'fact_reviews', 'fact_events'
+        ]
+        
+        loaded_count = 0
+        for table_name in tables:
+            csv_file = processed_dir / f'{table_name}.csv'
+            if csv_file.exists():
+                try:
+                    df = pd.read_csv(csv_file)
+                    if not df.empty:
+                        df.to_sql(table_name, engine, if_exists='replace', index=False)
+                        loaded_count += 1
+                except Exception as e:
+                    st.error(f"Error loading {table_name} into database: {e}")
+        
+        if loaded_count == 0:
+            return None
+            
+        return engine
+        
+    except Exception as e:
+        st.error(f"❌ Database initialization error: {str(e)}")
+        import traceback
+        with st.expander("Error Details"):
+            st.code(traceback.format_exc())
+        return None
 
-# Verify database has data
-try:
-    test_query = "SELECT COUNT(*) as cnt FROM fact_order_items"
-    result = pd.read_sql(test_query, engine)
-    if result.iloc[0]['cnt'] == 0:
-        st.warning("⚠️ Database is empty. Please ensure CSV files are loaded.")
-        st.stop()
-except Exception as e:
-    st.error(f"❌ Database verification failed: {str(e)}")
+# Initialize on startup
+csv_data = load_csv_data()
+engine = get_database_engine()
+
+# Check if we have data
+if csv_data.get('fact_order_items', pd.DataFrame()).empty:
+    st.error("❌ No data found! Please ensure CSV files exist in Data/Processed/")
+    st.info("Required files: fact_order_items.csv, fact_orders.csv, dim_users.csv, dim_products.csv")
     st.stop()
 
 # Custom CSS for beautiful styling
@@ -221,201 +217,277 @@ if page == "Analytics":
         ]
     )
 
-# Database Connection - engine is already initialized above
-
-# Query Functions
-@st.cache_data(ttl=3600)
+# Data loading functions - use CSV directly if database fails
 def load_data(query):
-    """Load data from SQLite database"""
-    try:
-        return pd.read_sql(query, engine)
-    except Exception as e:
-        st.error(f"Database query error: {e}")
-        return pd.DataFrame()
+    """Load data - try database first, fallback to CSV"""
+    if engine:
+        try:
+            result = pd.read_sql(query, engine)
+            if not result.empty:
+                return result
+        except:
+            pass  # Fall back to CSV
+    
+    # Fallback: Calculate from CSV data
+    return calculate_from_csv(query)
 
+def calculate_from_csv(query):
+    """Calculate query results from CSV data directly"""
+    # This is a simplified fallback - implement specific queries as needed
+    return pd.DataFrame()
+
+# Query Functions using CSV data directly
 def get_kpis():
     """Get key performance indicators"""
-    query = """
-    SELECT 
-        COUNT(DISTINCT order_id) as total_orders,
-        COUNT(DISTINCT user_id) as total_customers,
-        ROUND(SUM(item_total), 2) as total_revenue,
-        ROUND(SUM(item_total) / COUNT(DISTINCT order_id), 2) as avg_order_value
-    FROM fact_order_items
-    """
-    result = load_data(query)
-    if result.empty or len(result) == 0:
+    if 'fact_order_items' not in csv_data or csv_data['fact_order_items'].empty:
         return {
             'total_orders': 0,
             'total_customers': 0,
             'total_revenue': 0.0,
             'avg_order_value': 0.0
         }
-    return result.iloc[0].to_dict()
+    
+    df = csv_data['fact_order_items']
+    
+    total_orders = df['order_id'].nunique()
+    total_customers = df['user_id'].nunique()
+    total_revenue = df['item_total'].sum()
+    avg_order_value = total_revenue / total_orders if total_orders > 0 else 0
+    
+    return {
+        'total_orders': int(total_orders),
+        'total_customers': int(total_customers),
+        'total_revenue': float(round(total_revenue, 2)),
+        'avg_order_value': float(round(avg_order_value, 2))
+    }
 
 def get_revenue_by_month():
     """Get monthly revenue trend"""
-    query = """
-    SELECT 
-        strftime('%Y-%m', o.order_date) as month,
-        ROUND(SUM(foi.item_total), 2) as revenue
-    FROM fact_order_items foi
-    JOIN fact_orders o ON foi.order_id = o.order_id
-    GROUP BY strftime('%Y-%m', o.order_date)
-    ORDER BY month
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'fact_orders' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    orders = csv_data['fact_orders']
+    
+    # Merge and calculate
+    merged = order_items.merge(orders[['order_id', 'order_date']], on='order_id', how='left')
+    merged['order_date'] = pd.to_datetime(merged['order_date'])
+    merged['month'] = merged['order_date'].dt.to_period('M').astype(str)
+    
+    monthly = merged.groupby('month')['item_total'].sum().reset_index()
+    monthly.columns = ['month', 'revenue']
+    monthly['revenue'] = monthly['revenue'].round(2)
+    
+    return monthly.sort_values('month')
 
 def get_top_products():
     """Get top 10 products by revenue"""
-    query = """
-    SELECT 
-        p.product_name,
-        COUNT(*) as quantity_sold,
-        ROUND(SUM(foi.item_total), 2) as total_revenue
-    FROM fact_order_items foi
-    JOIN dim_products p ON foi.product_id = p.product_id
-    GROUP BY foi.product_id, p.product_name
-    ORDER BY total_revenue DESC
-    LIMIT 10
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    products = csv_data['dim_products']
+    
+    merged = order_items.merge(products[['product_id', 'product_name']], on='product_id', how='left')
+    
+    top = merged.groupby('product_name').agg({
+        'item_total': 'sum',
+        'quantity': 'count'
+    }).reset_index()
+    
+    top.columns = ['product_name', 'total_revenue', 'quantity_sold']
+    top['total_revenue'] = top['total_revenue'].round(2)
+    
+    return top.nlargest(10, 'total_revenue')
 
 def get_customer_metrics():
     """Get customer-related metrics"""
-    query = """
-    SELECT 
-        COUNT(DISTINCT user_id) as total_customers,
-        ROUND(AVG(order_count), 2) as avg_orders_per_customer,
-        ROUND(AVG(total_spent), 2) as avg_spend_per_customer
-    FROM (
-        SELECT 
-            user_id,
-            COUNT(*) as order_count,
-            SUM(item_total) as total_spent
-        FROM fact_order_items
-        GROUP BY user_id
-    )
-    """
-    result = load_data(query)
-    if result.empty or len(result) == 0:
+    if 'fact_order_items' not in csv_data:
         return {
             'total_customers': 0,
             'avg_orders_per_customer': 0.0,
             'avg_spend_per_customer': 0.0
         }
-    return result.iloc[0].to_dict()
+    
+    df = csv_data['fact_order_items']
+    
+    customer_stats = df.groupby('user_id').agg({
+        'order_id': 'nunique',
+        'item_total': 'sum'
+    }).reset_index()
+    
+    customer_stats.columns = ['user_id', 'order_count', 'total_spent']
+    
+    total_customers = len(customer_stats)
+    avg_orders = customer_stats['order_count'].mean()
+    avg_spend = customer_stats['total_spent'].mean()
+    
+    return {
+        'total_customers': int(total_customers),
+        'avg_orders_per_customer': float(round(avg_orders, 2)),
+        'avg_spend_per_customer': float(round(avg_spend, 2))
+    }
 
 def get_product_reviews():
     """Get product ratings"""
-    query = """
-    SELECT 
-        p.product_name,
-        ROUND(AVG(CAST(fr.rating as float)), 2) as avg_rating,
-        COUNT(*) as review_count
-    FROM fact_reviews fr
-    JOIN dim_products p ON fr.product_id = p.product_id
-    GROUP BY fr.product_id, p.product_name
-    ORDER BY avg_rating DESC, review_count DESC
-    LIMIT 10
-    """
-    return load_data(query)
+    if 'fact_reviews' not in csv_data or 'dim_products' not in csv_data:
+        return pd.DataFrame()
+    
+    reviews = csv_data['fact_reviews']
+    products = csv_data['dim_products']
+    
+    merged = reviews.merge(products[['product_id', 'product_name']], on='product_id', how='left')
+    
+    product_reviews = merged.groupby('product_name').agg({
+        'rating': 'mean',
+        'review_id': 'count'
+    }).reset_index()
+    
+    product_reviews.columns = ['product_name', 'avg_rating', 'review_count']
+    product_reviews['avg_rating'] = product_reviews['avg_rating'].round(2)
+    
+    return product_reviews.nlargest(10, 'avg_rating')
 
 def get_category_analysis():
     """Get product category analysis"""
-    query = """
-    SELECT 
-        p.category,
-        COUNT(DISTINCT foi.product_id) as product_count,
-        COUNT(DISTINCT foi.order_id) as order_count,
-        ROUND(SUM(foi.item_total), 2) as category_revenue,
-        ROUND(AVG(foi.item_price), 2) as avg_price,
-        ROUND(SUM(foi.quantity), 0) as total_quantity
-    FROM fact_order_items foi
-    JOIN dim_products p ON foi.product_id = p.product_id
-    GROUP BY p.category
-    ORDER BY category_revenue DESC
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    products = csv_data['dim_products']
+    
+    merged = order_items.merge(products[['product_id', 'category']], on='product_id', how='left')
+    
+    category_stats = merged.groupby('category').agg({
+        'product_id': 'nunique',
+        'order_id': 'nunique',
+        'item_total': 'sum',
+        'item_price': 'mean',
+        'quantity': 'sum'
+    }).reset_index()
+    
+    category_stats.columns = ['category', 'product_count', 'order_count', 'category_revenue', 'avg_price', 'total_quantity']
+    category_stats['category_revenue'] = category_stats['category_revenue'].round(2)
+    category_stats['avg_price'] = category_stats['avg_price'].round(2)
+    
+    return category_stats.sort_values('category_revenue', ascending=False)
 
 def get_customer_segments():
     """Get customer segmentation analysis"""
-    query = """
-    SELECT 
-        CASE 
-            WHEN total_spent > 5000 THEN 'Premium (>$5k)'
-            WHEN total_spent > 2000 THEN 'Gold ($2k-$5k)'
-            WHEN total_spent > 500 THEN 'Silver ($500-$2k)'
-            ELSE 'Bronze (<$500)'
-        END as segment,
-        COUNT(*) as customer_count,
-        ROUND(AVG(total_spent), 2) as avg_spend,
-        ROUND(AVG(order_count), 2) as avg_orders,
-        ROUND(SUM(total_spent), 2) as segment_revenue
-    FROM (
-        SELECT 
-            user_id,
-            COUNT(*) as order_count,
-            SUM(item_total) as total_spent
-        FROM fact_order_items
-        GROUP BY user_id
-    )
-    GROUP BY segment
-    ORDER BY segment_revenue DESC
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data:
+        return pd.DataFrame()
+    
+    df = csv_data['fact_order_items']
+    
+    customer_stats = df.groupby('user_id').agg({
+        'order_id': 'nunique',
+        'item_total': 'sum'
+    }).reset_index()
+    
+    customer_stats.columns = ['user_id', 'order_count', 'total_spent']
+    
+    def get_segment(spent):
+        if spent > 5000:
+            return 'Premium (>$5k)'
+        elif spent > 2000:
+            return 'Gold ($2k-$5k)'
+        elif spent > 500:
+            return 'Silver ($500-$2k)'
+        else:
+            return 'Bronze (<$500)'
+    
+    customer_stats['segment'] = customer_stats['total_spent'].apply(get_segment)
+    
+    segments = customer_stats.groupby('segment').agg({
+        'user_id': 'count',
+        'total_spent': ['mean', 'sum'],
+        'order_count': 'mean'
+    }).reset_index()
+    
+    segments.columns = ['segment', 'customer_count', 'avg_spend', 'segment_revenue', 'avg_orders']
+    segments['avg_spend'] = segments['avg_spend'].round(2)
+    segments['segment_revenue'] = segments['segment_revenue'].round(2)
+    segments['avg_orders'] = segments['avg_orders'].round(2)
+    
+    return segments.sort_values('segment_revenue', ascending=False)
 
 def get_sales_by_category():
     """Get sales trend by category"""
-    query = """
-    SELECT 
-        strftime('%Y-%m', o.order_date) as month,
-        p.category,
-        ROUND(SUM(foi.item_total), 2) as revenue
-    FROM fact_order_items foi
-    JOIN fact_orders o ON foi.order_id = o.order_id
-    JOIN dim_products p ON foi.product_id = p.product_id
-    GROUP BY strftime('%Y-%m', o.order_date), p.category
-    ORDER BY month, revenue DESC
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'fact_orders' not in csv_data or 'dim_products' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    orders = csv_data['fact_orders']
+    products = csv_data['dim_products']
+    
+    merged = order_items.merge(orders[['order_id', 'order_date']], on='order_id', how='left')
+    merged = merged.merge(products[['product_id', 'category']], on='product_id', how='left')
+    
+    merged['order_date'] = pd.to_datetime(merged['order_date'])
+    merged['month'] = merged['order_date'].dt.to_period('M').astype(str)
+    
+    monthly_category = merged.groupby(['month', 'category'])['item_total'].sum().reset_index()
+    monthly_category.columns = ['month', 'category', 'revenue']
+    monthly_category['revenue'] = monthly_category['revenue'].round(2)
+    
+    return monthly_category.sort_values(['month', 'revenue'], ascending=[True, False])
 
 def get_top_customers():
     """Get top customers by revenue"""
-    query = """
-    SELECT 
-        u.user_id,
-        u.customer_name,
-        COUNT(DISTINCT foi.order_id) as order_count,
-        ROUND(SUM(foi.item_total), 2) as total_spent,
-        ROUND(AVG(foi.item_price), 2) as avg_purchase
-    FROM fact_order_items foi
-    JOIN dim_users u ON foi.user_id = u.user_id
-    GROUP BY u.user_id, u.customer_name
-    ORDER BY total_spent DESC
-    LIMIT 10
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'dim_users' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    users = csv_data['dim_users']
+    
+    customer_stats = order_items.groupby('user_id').agg({
+        'order_id': 'nunique',
+        'item_total': 'sum',
+        'item_price': 'mean'
+    }).reset_index()
+    
+    customer_stats.columns = ['user_id', 'order_count', 'total_spent', 'avg_purchase']
+    
+    merged = customer_stats.merge(users[['user_id', 'customer_name']], on='user_id', how='left')
+    merged['total_spent'] = merged['total_spent'].round(2)
+    merged['avg_purchase'] = merged['avg_purchase'].round(2)
+    
+    return merged.nlargest(10, 'total_spent')[['user_id', 'customer_name', 'order_count', 'total_spent', 'avg_purchase']]
 
 def get_product_performance():
     """Get detailed product performance metrics"""
-    query = """
-    SELECT 
-        p.product_name,
-        p.category,
-        COUNT(DISTINCT foi.order_id) as times_sold,
-        ROUND(SUM(foi.quantity), 0) as units_sold,
-        ROUND(SUM(foi.item_total), 2) as total_revenue,
-        ROUND(AVG(foi.item_price), 2) as avg_price,
-        ROUND(AVG(CAST(fr.rating as float)), 2) as avg_rating
-    FROM fact_order_items foi
-    JOIN dim_products p ON foi.product_id = p.product_id
-    LEFT JOIN fact_reviews fr ON foi.product_id = fr.product_id
-    GROUP BY foi.product_id, p.product_name, p.category
-    ORDER BY total_revenue DESC
-    LIMIT 15
-    """
-    return load_data(query)
+    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+        return pd.DataFrame()
+    
+    order_items = csv_data['fact_order_items']
+    products = csv_data['dim_products']
+    
+    merged = order_items.merge(products[['product_id', 'product_name', 'category']], on='product_id', how='left')
+    
+    product_stats = merged.groupby(['product_id', 'product_name', 'category']).agg({
+        'order_id': 'nunique',
+        'quantity': 'sum',
+        'item_total': 'sum',
+        'item_price': 'mean'
+    }).reset_index()
+    
+    product_stats.columns = ['product_id', 'product_name', 'category', 'times_sold', 'units_sold', 'total_revenue', 'avg_price']
+    product_stats['total_revenue'] = product_stats['total_revenue'].round(2)
+    product_stats['avg_price'] = product_stats['avg_price'].round(2)
+    product_stats['units_sold'] = product_stats['units_sold'].round(0)
+    
+    # Add ratings if available
+    if 'fact_reviews' in csv_data and not csv_data['fact_reviews'].empty:
+        reviews = csv_data['fact_reviews']
+        avg_ratings = reviews.groupby('product_id')['rating'].mean().reset_index()
+        avg_ratings.columns = ['product_id', 'avg_rating']
+        avg_ratings['avg_rating'] = avg_ratings['avg_rating'].round(2)
+        product_stats = product_stats.merge(avg_ratings, on='product_id', how='left')
+        product_stats['avg_rating'] = product_stats['avg_rating'].fillna(0)
+    else:
+        product_stats['avg_rating'] = 0.0
+    
+    return product_stats.nlargest(15, 'total_revenue')
 
 # Main App
 st.title("📊 E-Commerce Analytics Dashboard")
@@ -480,6 +552,8 @@ try:
                     height=400
                 )
                 st.plotly_chart(fig_revenue, use_container_width=True)
+            else:
+                st.info("No revenue data available")
 
         elif analytics_option == "Products Performance":
             # Products and Ratings Section
@@ -509,6 +583,8 @@ try:
                         yaxis_title=""
                     )
                     st.plotly_chart(fig_products, use_container_width=True)
+                else:
+                    st.info("No product data available")
 
             with col2:
                 st.markdown("#### Top Rated Products")
@@ -533,6 +609,8 @@ try:
                         yaxis_title="Average Rating"
                     )
                     st.plotly_chart(fig_ratings, use_container_width=True)
+                else:
+                    st.info("No review data available")
 
         elif analytics_option == "Customer Insights":
             # Customer Insights Section
@@ -593,6 +671,8 @@ try:
                     display_df = category_data.copy()
                     display_df.columns = ['Category', 'Products', 'Orders', 'Revenue', 'Avg Price', 'Units Sold']
                     st.dataframe(display_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No category data available")
 
         elif analytics_option == "Customer Segmentation":
             # Customer Segmentation Section
@@ -637,6 +717,8 @@ try:
                         yaxis_title="Revenue ($)"
                     )
                     st.plotly_chart(fig_seg_revenue, use_container_width=True)
+            else:
+                st.info("No customer segmentation data available")
 
         elif analytics_option == "Sales Trend by Category":
             # Sales by Category Trend
@@ -668,6 +750,8 @@ try:
                     )
                 )
                 st.plotly_chart(fig_sales_trend, use_container_width=True)
+            else:
+                st.info("No sales trend data available")
 
         elif analytics_option == "Top Customers":
             # Top Customers Section
@@ -695,6 +779,8 @@ try:
                     coloraxis_colorbar=dict(title="Orders")
                 )
                 st.plotly_chart(fig_customers, use_container_width=True)
+            else:
+                st.info("No customer data available")
 
         elif analytics_option == "Detailed Product Performance":
             # Product Performance Detailed Analysis
@@ -704,7 +790,7 @@ try:
             if not product_perf.empty:
                 st.markdown("#### Top 15 Products by Revenue with Full Metrics")
                 display_prod = product_perf.copy()
-                display_prod.columns = ['Product', 'Category', 'Times Sold', 'Units Sold', 'Revenue', 'Avg Price', 'Rating']
+                display_prod.columns = ['Product ID', 'Product', 'Category', 'Times Sold', 'Units Sold', 'Revenue', 'Avg Price', 'Rating']
                 st.dataframe(display_prod, use_container_width=True, hide_index=True)
 
                 # Product scatter plot
@@ -728,6 +814,8 @@ try:
                     yaxis_title="Average Rating"
                 )
                 st.plotly_chart(fig_prod, use_container_width=True)
+            else:
+                st.info("No product performance data available")
 
     # Footer
     st.markdown("""
@@ -740,4 +828,7 @@ try:
 
 except Exception as e:
     st.error(f"❌ Error loading dashboard: {str(e)}")
-    st.info("Please ensure the database has been initialized with the ETL pipeline.")
+    import traceback
+    with st.expander("Error Details"):
+        st.code(traceback.format_exc())
+    st.info("Please ensure CSV files are available in Data/Processed/ folder")
