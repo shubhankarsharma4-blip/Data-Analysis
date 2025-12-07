@@ -8,27 +8,37 @@ from datetime import datetime, timedelta
 import os
 
 # Initialize database if it doesn't exist
+@st.cache_resource
 def initialize_database():
-    """Initialize database from processed CSV files"""
+    """Initialize database from processed CSV files - cached for performance"""
     db_path = Path(__file__).parent / 'ecommerce.db'
     processed_dir = Path(__file__).parent / 'Data' / 'Processed'
     
     try:
-        # Check if database already has tables
         from sqlalchemy import create_engine, inspect
+        
+        # Create engine
         engine = create_engine(f'sqlite:///{db_path}')
+        
+        # Check if database already has all required tables
         inspector = inspect(engine)
         existing_tables = inspector.get_table_names()
         
-        # If all required tables exist, we're good
         required_tables = ['dim_products', 'dim_users', 'fact_orders', 'fact_order_items', 'fact_reviews']
-        if all(table in existing_tables for table in required_tables):
-            return True
+        tables_exist = all(table in existing_tables for table in required_tables)
         
-        # Otherwise, initialize from CSV
-        st.warning("⚙️ Initializing database from processed data files...")
+        # If tables exist and have data, we're good
+        if tables_exist:
+            # Verify tables have data
+            try:
+                test_query = "SELECT COUNT(*) as cnt FROM fact_order_items"
+                result = pd.read_sql(test_query, engine)
+                if result.iloc[0]['cnt'] > 0:
+                    return engine
+            except:
+                pass  # If query fails, recreate tables
         
-        # List of expected processed tables
+        # Initialize from CSV files
         tables = [
             'dim_products',
             'dim_users', 
@@ -45,13 +55,21 @@ def initialize_database():
                 df = pd.read_csv(csv_file)
                 df.to_sql(table_name, engine, if_exists='replace', index=False)
         
-        st.success("✅ Database initialized successfully from processed data!")
-        return True
+        # Verify tables were created
+        inspector = inspect(engine)
+        created_tables = inspector.get_table_names()
+        missing_tables = [t for t in required_tables if t not in created_tables]
+        
+        if missing_tables:
+            raise Exception(f"Failed to create tables: {missing_tables}")
+        
+        return engine
         
     except Exception as e:
         st.error(f"❌ Error initializing database: {str(e)}")
-        st.info("Trying to load from CSV files directly...")
-        return False
+        import traceback
+        st.code(traceback.format_exc())
+        return None
 
 # Page Configuration
 st.set_page_config(
@@ -62,7 +80,22 @@ st.set_page_config(
 )
 
 # Initialize database
-if not initialize_database():
+with st.spinner("⚙️ Initializing database from processed data files..."):
+    engine = initialize_database()
+
+if engine is None:
+    st.error("❌ Failed to initialize database. Please check CSV files in Data/Processed/")
+    st.stop()
+
+# Verify database has data
+try:
+    test_query = "SELECT COUNT(*) as cnt FROM fact_order_items"
+    result = pd.read_sql(test_query, engine)
+    if result.iloc[0]['cnt'] == 0:
+        st.warning("⚠️ Database is empty. Please ensure CSV files are loaded.")
+        st.stop()
+except Exception as e:
+    st.error(f"❌ Database verification failed: {str(e)}")
     st.stop()
 
 # Custom CSS for beautiful styling
@@ -188,13 +221,7 @@ if page == "Analytics":
         ]
     )
 
-# Database Connection
-@st.cache_resource
-def get_engine():
-    db_path = Path(__file__).parent / 'ecommerce.db'
-    return create_engine(f'sqlite:///{db_path}')
-
-engine = get_engine()
+# Database Connection - engine is already initialized above
 
 # Query Functions
 @st.cache_data(ttl=3600)
@@ -217,6 +244,13 @@ def get_kpis():
     FROM fact_order_items
     """
     result = load_data(query)
+    if result.empty or len(result) == 0:
+        return {
+            'total_orders': 0,
+            'total_customers': 0,
+            'total_revenue': 0.0,
+            'avg_order_value': 0.0
+        }
     return result.iloc[0].to_dict()
 
 def get_revenue_by_month():
@@ -264,6 +298,12 @@ def get_customer_metrics():
     )
     """
     result = load_data(query)
+    if result.empty or len(result) == 0:
+        return {
+            'total_customers': 0,
+            'avg_orders_per_customer': 0.0,
+            'avg_spend_per_customer': 0.0
+        }
     return result.iloc[0].to_dict()
 
 def get_product_reviews():
