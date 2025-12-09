@@ -9,7 +9,7 @@ import os
 
 # Page Configuration - Must be first
 st.set_page_config(
-    page_title="Ecommerce Analytics Dashboard",
+    page_title="E-Commerce Analytics Dashboard",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -198,8 +198,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Sidebar Navigation
-st.sidebar.title("📊 Dashboard Navigation")
-page = st.sidebar.selectbox("Choose a page", ["Home", "Analytics"])
+st.sidebar.title("Dashboard Navigation")
+page = st.sidebar.selectbox("Choose a page", ["Overview", "Analytics"])
 
 analytics_option = None
 if page == "Analytics":
@@ -213,7 +213,8 @@ if page == "Analytics":
             "Customer Segmentation",
             "Sales Trend by Category",
             "Top Customers",
-            "Detailed Product Performance"
+            "Detailed Product Performance",
+            "User Demographics"
         ]
     )
 
@@ -448,11 +449,11 @@ def get_top_customers():
     
     customer_stats.columns = ['user_id', 'order_count', 'total_spent', 'avg_purchase']
     
-    merged = customer_stats.merge(users[['user_id', 'customer_name']], on='user_id', how='left')
+    merged = customer_stats.merge(users[['user_id', 'name']], on='user_id', how='left')
     merged['total_spent'] = merged['total_spent'].round(2)
     merged['avg_purchase'] = merged['avg_purchase'].round(2)
-    
-    return merged.nlargest(10, 'total_spent')[['user_id', 'customer_name', 'order_count', 'total_spent', 'avg_purchase']]
+
+    return merged.nlargest(10, 'total_spent')[['user_id', 'name', 'order_count', 'total_spent', 'avg_purchase']]
 
 def get_product_performance():
     """Get detailed product performance metrics"""
@@ -489,12 +490,50 @@ def get_product_performance():
     
     return product_stats.nlargest(15, 'total_revenue')
 
+def get_gender_distribution():
+    """Get gender distribution of users"""
+    if 'dim_users' not in csv_data:
+        return pd.DataFrame()
+
+    users = csv_data['dim_users']
+    gender_dist = users['gender'].value_counts().reset_index()
+    gender_dist.columns = ['gender', 'count']
+    gender_dist['percentage'] = (gender_dist['count'] / gender_dist['count'].sum() * 100).round(1)
+
+    return gender_dist
+
+def get_city_distribution():
+    """Get top cities by user count"""
+    if 'dim_users' not in csv_data:
+        return pd.DataFrame()
+
+    users = csv_data['dim_users']
+    city_dist = users['city'].value_counts().reset_index()
+    city_dist.columns = ['city', 'user_count']
+    city_dist['percentage'] = (city_dist['user_count'] / city_dist['user_count'].sum() * 100).round(1)
+
+    return city_dist.nlargest(10, 'user_count')
+
+def get_signup_trends():
+    """Get user signup trends by month"""
+    if 'dim_users' not in csv_data:
+        return pd.DataFrame()
+
+    users = csv_data['dim_users']
+    users['signup_date'] = pd.to_datetime(users['signup_date'])
+    users['signup_month'] = users['signup_date'].dt.to_period('M').astype(str)
+
+    signup_trends = users.groupby('signup_month').size().reset_index()
+    signup_trends.columns = ['month', 'new_users']
+
+    return signup_trends.sort_values('month')
+
 # Main App
-st.title("📊 E-Commerce Analytics Dashboard")
+st.title("E-Commerce Analytics Dashboard")
 st.markdown('<p class="subtitle">Real-time insights into your e-commerce business performance</p>', unsafe_allow_html=True)
 
 try:
-    if page == "Home":
+    if page == "Overview":
         # KPIs Section
         st.markdown("### 📈 Key Performance Indicators", unsafe_allow_html=True)
         kpis = get_kpis()
@@ -762,7 +801,7 @@ try:
                 fig_customers = px.bar(
                     top_customers,
                     x='total_spent',
-                    y='customer_name',
+                    y='name',
                     orientation='h',
                     template='plotly_white',
                     color='order_count',
@@ -816,6 +855,84 @@ try:
                 st.plotly_chart(fig_prod, use_container_width=True)
             else:
                 st.info("No product performance data available")
+
+        elif analytics_option == "User Demographics":
+            # User Demographics Section
+            st.markdown("### 👤 User Demographics", unsafe_allow_html=True)
+
+            col1, col2, col3 = st.columns(3, gap="large")
+
+            with col1:
+                st.markdown("#### Gender Distribution")
+                gender_data = get_gender_distribution()
+                if not gender_data.empty:
+                    fig_gender = px.pie(
+                        gender_data,
+                        values='count',
+                        names='gender',
+                        template='plotly_white',
+                        color_discrete_sequence=['#FF69B4', '#4169E1']
+                    )
+                    fig_gender.update_layout(
+                        height=300,
+                        showlegend=True
+                    )
+                    st.plotly_chart(fig_gender, use_container_width=True)
+                else:
+                    st.info("No gender data available")
+
+            with col2:
+                st.markdown("#### Top 10 Cities by User Count")
+                city_data = get_city_distribution()
+                if not city_data.empty:
+                    fig_city = px.bar(
+                        city_data,
+                        x='user_count',
+                        y='city',
+                        orientation='h',
+                        template='plotly_white',
+                        color='user_count',
+                        color_continuous_scale='Blues'
+                    )
+                    fig_city.update_layout(
+                        showlegend=False,
+                        hovermode='y',
+                        plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                        paper_bgcolor='rgba(255,255,255,0)',
+                        height=300,
+                        xaxis_title="User Count",
+                        yaxis_title=""
+                    )
+                    st.plotly_chart(fig_city, use_container_width=True)
+                else:
+                    st.info("No city data available")
+
+            with col3:
+                st.markdown("#### User Signup Trends")
+                signup_data = get_signup_trends()
+                if not signup_data.empty:
+                    fig_signup = px.line(
+                        signup_data,
+                        x='month',
+                        y='new_users',
+                        template='plotly_white',
+                        markers=True
+                    )
+                    fig_signup.update_traces(
+                        line=dict(color='#667eea', width=3),
+                        marker=dict(size=8, color='#764ba2')
+                    )
+                    fig_signup.update_layout(
+                        hovermode='x unified',
+                        plot_bgcolor='rgba(240, 240, 240, 0.5)',
+                        paper_bgcolor='rgba(255,255,255,0)',
+                        height=300,
+                        xaxis_title="Month",
+                        yaxis_title="New Users"
+                    )
+                    st.plotly_chart(fig_signup, use_container_width=True)
+                else:
+                    st.info("No signup data available")
 
     # Footer
     st.markdown("""

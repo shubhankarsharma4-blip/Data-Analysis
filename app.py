@@ -55,13 +55,13 @@ def get_kpis():
 def get_monthly_revenue():
     """Get monthly revenue trend"""
     query = """
-    SELECT 
-        DATE(event_date) as date,
+    SELECT
+        DATE(order_date) as date,
         ROUND(SUM(item_total), 2) as revenue,
-        strftime('%Y-%m', event_date) as year_month
+        strftime('%Y-%m', order_date) as year_month
     FROM fact_order_items foi
-    JOIN fact_events fe ON foi.user_id = fe.user_id
-    GROUP BY strftime('%Y-%m', event_date)
+    JOIN fact_orders fo ON foi.order_id = fo.order_id
+    GROUP BY strftime('%Y-%m', order_date)
     ORDER BY year_month
     """
     return load_data(query)
@@ -121,13 +121,13 @@ def get_category_revenue():
 def get_customer_metrics():
     """Get customer-related metrics"""
     query = """
-    SELECT 
+    SELECT
         du.user_id,
         du.name,
         du.city,
         COUNT(DISTINCT foi.order_id) as orders,
         ROUND(SUM(foi.item_total), 2) as total_spent,
-        MAX(foi.item_total) as avg_order_value
+        ROUND(SUM(foi.item_total) / COUNT(DISTINCT foi.order_id), 2) as avg_order_value
     FROM dim_users du
     LEFT JOIN fact_order_items foi ON du.user_id = foi.user_id
     GROUP BY du.user_id, du.name, du.city
@@ -472,11 +472,3 @@ elif page == "Reports":
             """)
             
             st.dataframe(customers_clean.head(50), use_container_width=True)
-
-# Footer
-st.markdown("---")
-st.markdown("""
-<div style='text-align: center'>
-    <p>Ecommerce Analytics Dashboard | Last Updated: """ + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + """</p>
-</div>
-""", unsafe_allow_html=True)
