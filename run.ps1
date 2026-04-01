@@ -15,8 +15,7 @@ if ($recreate -or -not (Test-Path $venvPath)) {
     Write-Host "Activating virtual environment and installing dependencies..."
     & "$venvPath\Scripts\Activate.ps1"
     pip install --upgrade pip
-    pip install -r requirements-lock.txt
-    pip install streamlit sqlalchemy
+    pip install -r requirements.txt
 } else {
     Write-Host "Using existing virtual environment at $venvPath"
     & "$venvPath\Scripts\Activate.ps1"

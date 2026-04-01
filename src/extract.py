@@ -19,10 +19,7 @@ def load_csv_safe(filepath: Path, table_name: str) -> pd.DataFrame:
         table_name: Name of the table (for logging)
     
     Returns:
-        DataFrame or empty DataFrame if file not found
-    
-    Raises:
-        Exception: If CSV is corrupted or unreadable (after logging)
+        DataFrame or empty DataFrame if the file is missing or unreadable
     """
     try:
         if not filepath.exists():
@@ -35,10 +32,10 @@ def load_csv_safe(filepath: Path, table_name: str) -> pd.DataFrame:
     
     except pd.errors.ParserError as e:
         logger.error(f"CSV parsing error in {table_name}: {e}")
-        raise
+        return pd.DataFrame()
     except Exception as e:
         logger.error(f"Unexpected error loading {table_name}: {type(e).__name__}: {e}")
-        raise
+        return pd.DataFrame()
 
 
 def load_users():

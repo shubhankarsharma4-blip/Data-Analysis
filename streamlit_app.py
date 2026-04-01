@@ -7,6 +7,43 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import os
 
+BASE_DIR = Path(__file__).parent
+PROCESSED_DIR = BASE_DIR / "Data" / "Processed"
+CSV_TABLES = [
+    "dim_products",
+    "dim_users",
+    "fact_orders",
+    "fact_order_items",
+    "fact_reviews",
+    "fact_events",
+]
+
+
+def safe_read_csv(csv_file: Path) -> tuple[pd.DataFrame, dict]:
+    """Read a CSV safely and return debug metadata for the UI."""
+    relative_path = str(csv_file.relative_to(BASE_DIR))
+
+    try:
+        if not csv_file.exists():
+            return pd.DataFrame(), {
+                "status": "missing",
+                "path": relative_path,
+                "message": "File not found",
+            }
+
+        df = pd.read_csv(csv_file)
+        return df, {
+            "status": "loaded",
+            "path": relative_path,
+            "message": f"Loaded {len(df):,} rows",
+        }
+    except Exception as e:
+        return pd.DataFrame(), {
+            "status": "error",
+            "path": relative_path,
+            "message": f"{type(e).__name__}: {e}",
+        }
+
 # Page Configuration - Must be first
 st.set_page_config(
     page_title="E-Commerce Analytics Dashboard",
@@ -18,59 +55,40 @@ st.set_page_config(
 # Load CSV data directly into memory as fallback
 @st.cache_data
 def load_csv_data():
-    """Load all CSV files directly into memory"""
-    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
+    """Load all CSV files directly into memory using repo-relative paths."""
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     data = {}
-    
-    tables = [
-        'dim_products', 'dim_users', 'fact_orders', 
-        'fact_order_items', 'fact_reviews', 'fact_events'
-    ]
-    
-    for table_name in tables:
-        csv_file = processed_dir / f'{table_name}.csv'
-        if csv_file.exists():
-            try:
-                data[table_name] = pd.read_csv(csv_file)
-            except Exception as e:
-                st.error(f"Error loading {table_name}: {e}")
-                data[table_name] = pd.DataFrame()
-        else:
-            data[table_name] = pd.DataFrame()
-    
-    return data
+    debug_info = {}
+
+    for table_name in CSV_TABLES:
+        csv_file = PROCESSED_DIR / f"{table_name}.csv"
+        df, status = safe_read_csv(csv_file)
+        data[table_name] = df
+        debug_info[table_name] = status
+
+    return {"tables": data, "debug": debug_info}
 
 # Initialize database from CSV files
 @st.cache_resource
 def get_database_engine():
     """Initialize database from CSV files - always rebuild"""
-    db_path = Path(__file__).parent / 'ecommerce.db'
-    processed_dir = Path(__file__).parent / 'Data' / 'Processed'
+    db_path = BASE_DIR / "ecommerce.db"
     
     try:
-        from sqlalchemy import create_engine, inspect
-        
-        # Create engine with absolute path for better compatibility
-        db_path_str = str(db_path.absolute())
-        engine = create_engine(f'sqlite:///{db_path_str}')
-        
-        # Always rebuild tables from CSV (ephemeral on Streamlit Cloud)
-        tables = [
-            'dim_products', 'dim_users', 'fact_orders',
-            'fact_order_items', 'fact_reviews', 'fact_events'
-        ]
+        from sqlalchemy import create_engine
+
+        engine = create_engine(f"sqlite:///{db_path.as_posix()}")
         
         loaded_count = 0
-        for table_name in tables:
-            csv_file = processed_dir / f'{table_name}.csv'
-            if csv_file.exists():
-                try:
-                    df = pd.read_csv(csv_file)
-                    if not df.empty:
-                        df.to_sql(table_name, engine, if_exists='replace', index=False)
-                        loaded_count += 1
-                except Exception as e:
-                    st.error(f"Error loading {table_name} into database: {e}")
+        for table_name, df in csv_data.items():
+            if df.empty:
+                continue
+
+            try:
+                df.to_sql(table_name, engine, if_exists="replace", index=False)
+                loaded_count += 1
+            except Exception as e:
+                st.warning(f"Database skipped `{table_name}`: {e}")
         
         if loaded_count == 0:
             return None
@@ -85,14 +103,27 @@ def get_database_engine():
         return None
 
 # Initialize on startup
-csv_data = load_csv_data()
+csv_payload = load_csv_data()
+csv_data = csv_payload["tables"]
+csv_debug = csv_payload["debug"]
 engine = get_database_engine()
 
+loaded_files = [name for name, info in csv_debug.items() if info["status"] == "loaded"]
+missing_files = [name for name, info in csv_debug.items() if info["status"] == "missing"]
+errored_files = [name for name, info in csv_debug.items() if info["status"] == "error"]
+demo_mode = len(loaded_files) == 0
+
+
+def has_columns(table_name, columns):
+    """Check that a cached DataFrame exists and contains the required columns."""
+    df = csv_data.get(table_name, pd.DataFrame())
+    return not df.empty and set(columns).issubset(df.columns)
+
 # Check if we have data
-if csv_data.get('fact_order_items', pd.DataFrame()).empty:
+if False and csv_data.get('fact_order_items', pd.DataFrame()).empty:
     st.error("❌ No data found! Please ensure CSV files exist in Data/Processed/")
     st.info("Required files: fact_order_items.csv, fact_orders.csv, dim_users.csv, dim_products.csv")
-    st.stop()
+    pass
 
 # Custom CSS for beautiful styling
 st.markdown("""
@@ -201,6 +232,23 @@ st.markdown("""
 st.sidebar.title("Dashboard Navigation")
 page = st.sidebar.selectbox("Choose a page", ["Overview", "Analytics"])
 
+if demo_mode:
+    st.warning(
+        "Data files were not found in `Data/Processed/`. The dashboard is running in demo mode and will keep rendering with empty-state UI."
+    )
+elif missing_files or errored_files:
+    st.warning(
+        "Some CSV files are unavailable, so a few charts may show empty states while the rest of the dashboard continues to work."
+    )
+
+with st.sidebar.expander("Data Loading Debug", expanded=False):
+    st.caption(f"Processed directory: `{PROCESSED_DIR.relative_to(BASE_DIR)}`")
+    for table_name in CSV_TABLES:
+        info = csv_debug[table_name]
+        status_label = {"loaded": "OK", "missing": "Missing", "error": "Error"}[info["status"]]
+        st.write(f"{status_label}: `{table_name}.csv`")
+        st.caption(f"{info['path']} | {info['message']}")
+
 analytics_option = None
 if page == "Analytics":
     analytics_option = st.sidebar.selectbox(
@@ -240,7 +288,7 @@ def calculate_from_csv(query):
 # Query Functions using CSV data directly
 def get_kpis():
     """Get key performance indicators"""
-    if 'fact_order_items' not in csv_data or csv_data['fact_order_items'].empty:
+    if not has_columns("fact_order_items", {"order_id", "user_id", "item_total"}):
         return {
             'total_orders': 0,
             'total_customers': 0,
@@ -264,7 +312,7 @@ def get_kpis():
 
 def get_revenue_by_month():
     """Get monthly revenue trend"""
-    if 'fact_order_items' not in csv_data or 'fact_orders' not in csv_data:
+    if not has_columns("fact_order_items", {"order_id", "item_total"}) or not has_columns("fact_orders", {"order_id", "order_date"}):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -283,7 +331,7 @@ def get_revenue_by_month():
 
 def get_top_products():
     """Get top 10 products by revenue"""
-    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+    if not has_columns("fact_order_items", {"product_id", "item_total", "quantity"}) or not has_columns("dim_products", {"product_id", "product_name"}):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -303,7 +351,7 @@ def get_top_products():
 
 def get_customer_metrics():
     """Get customer-related metrics"""
-    if 'fact_order_items' not in csv_data:
+    if not has_columns("fact_order_items", {"user_id", "order_id", "item_total"}):
         return {
             'total_customers': 0,
             'avg_orders_per_customer': 0.0,
@@ -331,7 +379,7 @@ def get_customer_metrics():
 
 def get_product_reviews():
     """Get product ratings"""
-    if 'fact_reviews' not in csv_data or 'dim_products' not in csv_data:
+    if not has_columns("fact_reviews", {"product_id", "rating", "review_id"}) or not has_columns("dim_products", {"product_id", "product_name"}):
         return pd.DataFrame()
     
     reviews = csv_data['fact_reviews']
@@ -351,7 +399,7 @@ def get_product_reviews():
 
 def get_category_analysis():
     """Get product category analysis"""
-    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+    if not has_columns("fact_order_items", {"product_id", "order_id", "item_total", "item_price", "quantity"}) or not has_columns("dim_products", {"product_id", "category"}):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -375,7 +423,7 @@ def get_category_analysis():
 
 def get_customer_segments():
     """Get customer segmentation analysis"""
-    if 'fact_order_items' not in csv_data:
+    if not has_columns("fact_order_items", {"user_id", "order_id", "item_total"}):
         return pd.DataFrame()
     
     df = csv_data['fact_order_items']
@@ -414,7 +462,11 @@ def get_customer_segments():
 
 def get_sales_by_category():
     """Get sales trend by category"""
-    if 'fact_order_items' not in csv_data or 'fact_orders' not in csv_data or 'dim_products' not in csv_data:
+    if (
+        not has_columns("fact_order_items", {"order_id", "product_id", "item_total"})
+        or not has_columns("fact_orders", {"order_id", "order_date"})
+        or not has_columns("dim_products", {"product_id", "category"})
+    ):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -435,7 +487,7 @@ def get_sales_by_category():
 
 def get_top_customers():
     """Get top customers by revenue"""
-    if 'fact_order_items' not in csv_data or 'dim_users' not in csv_data:
+    if not has_columns("fact_order_items", {"user_id", "order_id", "item_total", "item_price"}) or not has_columns("dim_users", {"user_id", "name"}):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -457,7 +509,7 @@ def get_top_customers():
 
 def get_product_performance():
     """Get detailed product performance metrics"""
-    if 'fact_order_items' not in csv_data or 'dim_products' not in csv_data:
+    if not has_columns("fact_order_items", {"product_id", "order_id", "quantity", "item_total", "item_price"}) or not has_columns("dim_products", {"product_id", "product_name", "category"}):
         return pd.DataFrame()
     
     order_items = csv_data['fact_order_items']
@@ -478,7 +530,7 @@ def get_product_performance():
     product_stats['units_sold'] = product_stats['units_sold'].round(0)
     
     # Add ratings if available
-    if 'fact_reviews' in csv_data and not csv_data['fact_reviews'].empty:
+    if has_columns("fact_reviews", {"product_id", "rating"}):
         reviews = csv_data['fact_reviews']
         avg_ratings = reviews.groupby('product_id')['rating'].mean().reset_index()
         avg_ratings.columns = ['product_id', 'avg_rating']
@@ -492,7 +544,7 @@ def get_product_performance():
 
 def get_gender_distribution():
     """Get gender distribution of users"""
-    if 'dim_users' not in csv_data:
+    if not has_columns("dim_users", {"gender"}):
         return pd.DataFrame()
 
     users = csv_data['dim_users']
@@ -504,7 +556,7 @@ def get_gender_distribution():
 
 def get_city_distribution():
     """Get top cities by user count"""
-    if 'dim_users' not in csv_data:
+    if not has_columns("dim_users", {"city"}):
         return pd.DataFrame()
 
     users = csv_data['dim_users']
@@ -516,10 +568,10 @@ def get_city_distribution():
 
 def get_signup_trends():
     """Get user signup trends by month"""
-    if 'dim_users' not in csv_data:
+    if not has_columns("dim_users", {"signup_date"}):
         return pd.DataFrame()
 
-    users = csv_data['dim_users']
+    users = csv_data['dim_users'].copy()
     users['signup_date'] = pd.to_datetime(users['signup_date'])
     users['signup_month'] = users['signup_date'].dt.to_period('M').astype(str)
 
@@ -531,6 +583,12 @@ def get_signup_trends():
 # Main App
 st.title("E-Commerce Analytics Dashboard")
 st.markdown('<p class="subtitle">Real-time insights into your e-commerce business performance</p>', unsafe_allow_html=True)
+
+if loaded_files:
+    st.caption(f"Loaded CSV files: {', '.join(f'{name}.csv' for name in loaded_files)}")
+if missing_files or errored_files:
+    unavailable_files = missing_files + errored_files
+    st.caption(f"Unavailable CSV files: {', '.join(f'{name}.csv' for name in unavailable_files)}")
 
 try:
     if page == "Overview":

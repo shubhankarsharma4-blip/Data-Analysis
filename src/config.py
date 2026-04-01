@@ -3,9 +3,12 @@ from pathlib import Path
 # Project root is the parent of this file's directory
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
-DATA_DIR = PROJECT_ROOT / "data"
-RAW_DIR = DATA_DIR / "raw"
-PROCESSED_DIR = DATA_DIR / "processed"
+DATA_DIR = PROJECT_ROOT / "Data"
+RAW_DIR = DATA_DIR / "Raw"
+PROCESSED_DIR = DATA_DIR / "Processed"
+
+RAW_DIR.mkdir(parents=True, exist_ok=True)
+PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
 # Raw CSV file paths
 USERS_CSV       = RAW_DIR / "users.csv"
